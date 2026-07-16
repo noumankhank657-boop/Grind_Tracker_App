@@ -1,0 +1,59 @@
+import {
+  mysqlTable,
+  mysqlEnum,
+  serial,
+  varchar,
+  bigint,
+  int,
+  boolean,
+  json,
+  timestamp,
+  uniqueIndex,
+  index,
+} from "drizzle-orm/mysql-core";
+
+/**
+ * A task in the weekly routine template.
+ * `days` holds the weekdays the task is scheduled on, using JS convention:
+ * 0 = Sunday, 1 = Monday, ... 6 = Saturday.
+ */
+export const tasks = mysqlTable("tasks", {
+  id: serial("id").primaryKey(),
+  title: varchar("title", { length: 120 }).notNull(),
+  note: varchar("note", { length: 255 }),
+  slot: mysqlEnum("slot", ["anytime", "morning", "afternoon", "evening"])
+    .notNull()
+    .default("anytime"),
+  /** Latest local time of day to finish the task by, "HH:MM" 24h. Null = no deadline. */
+  deadline: varchar("deadline", { length: 5 }),
+  /** Estimated effort in minutes. Null = no estimate. */
+  durationMin: int("durationMin"),
+  days: json("days").$type<number[]>().notNull(),
+  color: varchar("color", { length: 24 }).notNull().default("lime"),
+  sortOrder: int("sortOrder").notNull().default(0),
+  active: boolean("active").notNull().default(true),
+  createdAt: timestamp("createdAt").notNull().defaultNow(),
+});
+
+/**
+ * One row per completed task per local calendar date (YYYY-MM-DD).
+ * The unique index makes toggling idempotent.
+ */
+export const completions = mysqlTable(
+  "completions",
+  {
+    id: serial("id").primaryKey(),
+    taskId: bigint("taskId", { mode: "number", unsigned: true }).notNull(),
+    date: varchar("date", { length: 10 }).notNull(),
+    completedAt: timestamp("completedAt").notNull().defaultNow(),
+  },
+  (t) => ({
+    taskDateUnique: uniqueIndex("task_date_unique").on(t.taskId, t.date),
+    dateIdx: index("date_idx").on(t.date),
+  }),
+);
+
+export type Task = typeof tasks.$inferSelect;
+export type InsertTask = typeof tasks.$inferInsert;
+export type Completion = typeof completions.$inferSelect;
+export type InsertCompletion = typeof completions.$inferInsert;

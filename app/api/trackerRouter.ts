@@ -1,0 +1,99 @@
+import { z } from "zod";
+import { createRouter, publicQuery } from "./middleware";
+import {
+  completionsInRange,
+  createTask,
+  deleteTask,
+  listTasks,
+  seedDefaultsIfEmpty,
+  toggleCompletion,
+  updateTask,
+} from "./queries/tracker";
+
+const dateString = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, "Expected YYYY-MM-DD");
+
+const daysOfWeek = z
+  .array(z.number().int().min(0).max(6))
+  .min(1, "Pick at least one day");
+
+const slotEnum = z.enum(["anytime", "morning", "afternoon", "evening"]);
+
+const deadlineField = z
+  .string()
+  .regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Expected HH:MM (24h)")
+  .nullable()
+  .optional();
+
+const durationField = z
+  .number()
+  .int()
+  .min(5, "Minimum 5 minutes")
+  .max(1440, "Maximum 24 hours")
+  .nullable()
+  .optional();
+
+export const trackerRouter = createRouter({
+  listTasks: publicQuery.query(() => listTasks()),
+
+  createTask: publicQuery
+    .input(
+      z.object({
+        title: z.string().trim().min(1, "Title is required").max(120),
+        note: z.string().trim().max(255).optional(),
+        slot: slotEnum,
+        deadline: deadlineField,
+        durationMin: durationField,
+        days: daysOfWeek,
+        color: z.string().max(24),
+        sortOrder: z.number().int().optional(),
+      }),
+    )
+    .mutation(({ input }) =>
+      createTask({
+        title: input.title,
+        note: input.note ?? null,
+        slot: input.slot,
+        deadline: input.deadline ?? null,
+        durationMin: input.durationMin ?? null,
+        days: [...input.days].sort(),
+        color: input.color,
+        sortOrder: input.sortOrder ?? 99,
+      }),
+    ),
+
+  updateTask: publicQuery
+    .input(
+      z.object({
+        id: z.number(),
+        title: z.string().trim().min(1).max(120).optional(),
+        note: z.string().trim().max(255).nullable().optional(),
+        slot: slotEnum.optional(),
+        deadline: deadlineField,
+        durationMin: durationField,
+        days: daysOfWeek.optional(),
+        color: z.string().max(24).optional(),
+        sortOrder: z.number().int().optional(),
+      }),
+    )
+    .mutation(({ input }) => {
+      const { id, ...data } = input;
+      if (data.days) data.days = [...data.days].sort();
+      return updateTask(id, data);
+    }),
+
+  deleteTask: publicQuery
+    .input(z.object({ id: z.number() }))
+    .mutation(({ input }) => deleteTask(input.id)),
+
+  seedDefaults: publicQuery.mutation(() => seedDefaultsIfEmpty()),
+
+  toggleCompletion: publicQuery
+    .input(z.object({ taskId: z.number(), date: dateString }))
+    .mutation(({ input }) => toggleCompletion(input.taskId, input.date)),
+
+  completionsInRange: publicQuery
+    .input(z.object({ start: dateString, end: dateString }))
+    .query(({ input }) => completionsInRange(input.start, input.end)),
+});

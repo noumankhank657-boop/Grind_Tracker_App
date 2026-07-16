@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#09090b" />
+    <script>
+      // Apply saved theme + accent before first paint (no flash).
+      try {
+        var t = localStorage.getItem("theme") || "dark";
+        var dark =
+          t === "dark" ||
+          ((t === "system" || !t) &&
+            window.matchMedia("(prefers-color-scheme: dark)").matches);
+        if (t === "light") dark = false;
+        document.documentElement.classList.toggle("dark", dark);
+        document.documentElement.style.colorScheme = dark ? "dark" : "light";
+        var accents = {
+          lime: ["80 81% 55%", "80 80% 8%"],
+          emerald: ["158 64% 52%", "160 80% 8%"],
+          amber: ["43 96% 56%", "45 90% 10%"],
+          rose: ["351 95% 71%", "350 80% 12%"],
+          violet: ["258 90% 76%", "260 60% 12%"],
+          blue: ["213 94% 68%", "215 80% 12%"],
+        };
+        var a = accents[localStorage.getItem("grind-accent")] || accents.lime;
+        var s = document.documentElement.style;
+        s.setProperty("--primary", a[0]);
+        s.setProperty("--primary-foreground", a[1]);
+        s.setProperty("--ring", a[0]);
+      } catch (e) {
+        document.documentElement.classList.add("dark");
+      }
+    </script>
+    <title>Grind Tracker</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
