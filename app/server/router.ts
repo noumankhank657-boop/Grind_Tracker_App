@@ -1,5 +1,5 @@
-import { createRouter, publicQuery } from "./middleware";
-import { trackerRouter } from "./trackerRouter";
+import { createRouter, publicQuery } from "./middleware.js";
+import { trackerRouter } from "./trackerRouter.js";
 
 export const appRouter = createRouter({
   ping: publicQuery.query(() => ({ ok: true, ts: Date.now() })),

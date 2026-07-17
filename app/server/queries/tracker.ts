@@ -1,7 +1,7 @@
 import { and, asc, between, eq } from "drizzle-orm";
-import { getDb } from "./connection";
-import { completions, tasks, type InsertTask } from "../../db/schema";
-import { DEFAULT_ROUTINE } from "../../contracts/routine";
+import { getDb } from "./connection.js";
+import { completions, tasks, type InsertTask } from "../../db/schema.js";
+import { DEFAULT_ROUTINE } from "../../contracts/routine.js";
 
 export async function listTasks() {
   return getDb()

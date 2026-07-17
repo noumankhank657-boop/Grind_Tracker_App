@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { createRouter, publicQuery } from "./middleware";
+import { createRouter, publicQuery } from "./middleware.js";
 import {
   completionsInRange,
   createTask,
@@ -8,7 +8,7 @@ import {
   seedDefaultsIfEmpty,
   toggleCompletion,
   updateTask,
-} from "./queries/tracker";
+} from "./queries/tracker.js";
 
 const dateString = z
   .string()

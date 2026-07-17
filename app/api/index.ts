@@ -1,5 +1,5 @@
 import { handle } from "hono/vercel";
-import { app } from "../server/app";
+import { app } from "../server/app.js";
 
 // No `config.runtime` here on purpose: Node.js is the default runtime for
 // Vercel functions, and this app needs it (mysql2 needs a real TCP/TLS
