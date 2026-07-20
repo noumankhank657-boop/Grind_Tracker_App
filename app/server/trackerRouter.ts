@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { createRouter, publicQuery } from "./middleware.js";
+import { createRouter, protectedProcedure } from "./middleware.js";
 import {
   completionsInRange,
   createTask,
@@ -35,9 +35,9 @@ const durationField = z
   .optional();
 
 export const trackerRouter = createRouter({
-  listTasks: publicQuery.query(() => listTasks()),
+  listTasks: protectedProcedure.query(({ ctx }) => listTasks(ctx.userId)),
 
-  createTask: publicQuery
+  createTask: protectedProcedure
     .input(
       z.object({
         title: z.string().trim().min(1, "Title is required").max(120),
@@ -50,8 +50,8 @@ export const trackerRouter = createRouter({
         sortOrder: z.number().int().optional(),
       }),
     )
-    .mutation(({ input }) =>
-      createTask({
+    .mutation(({ ctx, input }) =>
+      createTask(ctx.userId, {
         title: input.title,
         note: input.note ?? null,
         slot: input.slot,
@@ -63,7 +63,7 @@ export const trackerRouter = createRouter({
       }),
     ),
 
-  updateTask: publicQuery
+  updateTask: protectedProcedure
     .input(
       z.object({
         id: z.number(),
@@ -77,23 +77,23 @@ export const trackerRouter = createRouter({
         sortOrder: z.number().int().optional(),
       }),
     )
-    .mutation(({ input }) => {
+    .mutation(({ ctx, input }) => {
       const { id, ...data } = input;
       if (data.days) data.days = [...data.days].sort();
-      return updateTask(id, data);
+      return updateTask(ctx.userId, id, data);
     }),
 
-  deleteTask: publicQuery
+  deleteTask: protectedProcedure
     .input(z.object({ id: z.number() }))
-    .mutation(({ input }) => deleteTask(input.id)),
+    .mutation(({ ctx, input }) => deleteTask(ctx.userId, input.id)),
 
-  seedDefaults: publicQuery.mutation(() => seedDefaultsIfEmpty()),
+  seedDefaults: protectedProcedure.mutation(({ ctx }) => seedDefaultsIfEmpty(ctx.userId)),
 
-  toggleCompletion: publicQuery
+  toggleCompletion: protectedProcedure
     .input(z.object({ taskId: z.number(), date: dateString }))
-    .mutation(({ input }) => toggleCompletion(input.taskId, input.date)),
+    .mutation(({ ctx, input }) => toggleCompletion(ctx.userId, input.taskId, input.date)),
 
-  completionsInRange: publicQuery
+  completionsInRange: protectedProcedure
     .input(z.object({ start: dateString, end: dateString }))
-    .query(({ input }) => completionsInRange(input.start, input.end)),
+    .query(({ ctx, input }) => completionsInRange(ctx.userId, input.start, input.end)),
 });

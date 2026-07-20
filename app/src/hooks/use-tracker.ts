@@ -49,7 +49,7 @@ export function useToggleCompletion(rangeStart: string, rangeEnd: string) {
         }
         return [
           ...old,
-          { id: -Date.now(), taskId, date, completedAt: new Date() },
+          { id: -Date.now(), userId: "", taskId, date, completedAt: new Date() },
         ];
       });
       return { prev };

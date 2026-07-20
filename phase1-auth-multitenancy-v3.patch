@@ -1,0 +1,662 @@
+diff --git a/app/db/schema.ts b/app/db/schema.ts
+index 0b0fddb..6f57676 100644
+--- a/app/db/schema.ts
++++ b/app/db/schema.ts
+@@ -17,23 +17,31 @@ import {
+  * `days` holds the weekdays the task is scheduled on, using JS convention:
+  * 0 = Sunday, 1 = Monday, ... 6 = Saturday.
+  */
+-export const tasks = mysqlTable("tasks", {
+-  id: serial("id").primaryKey(),
+-  title: varchar("title", { length: 120 }).notNull(),
+-  note: varchar("note", { length: 255 }),
+-  slot: mysqlEnum("slot", ["anytime", "morning", "afternoon", "evening"])
+-    .notNull()
+-    .default("anytime"),
+-  /** Latest local time of day to finish the task by, "HH:MM" 24h. Null = no deadline. */
+-  deadline: varchar("deadline", { length: 5 }),
+-  /** Estimated effort in minutes. Null = no estimate. */
+-  durationMin: int("durationMin"),
+-  days: json("days").$type<number[]>().notNull(),
+-  color: varchar("color", { length: 24 }).notNull().default("lime"),
+-  sortOrder: int("sortOrder").notNull().default(0),
+-  active: boolean("active").notNull().default(true),
+-  createdAt: timestamp("createdAt").notNull().defaultNow(),
+-});
++export const tasks = mysqlTable(
++  "tasks",
++  {
++    id: serial("id").primaryKey(),
++    /** Clerk user id (the "sub" claim). Every row belongs to exactly one user. */
++    userId: varchar("userId", { length: 191 }).notNull(),
++    title: varchar("title", { length: 120 }).notNull(),
++    note: varchar("note", { length: 255 }),
++    slot: mysqlEnum("slot", ["anytime", "morning", "afternoon", "evening"])
++      .notNull()
++      .default("anytime"),
++    /** Latest local time of day to finish the task by, "HH:MM" 24h. Null = no deadline. */
++    deadline: varchar("deadline", { length: 5 }),
++    /** Estimated effort in minutes. Null = no estimate. */
++    durationMin: int("durationMin"),
++    days: json("days").$type<number[]>().notNull(),
++    color: varchar("color", { length: 24 }).notNull().default("lime"),
++    sortOrder: int("sortOrder").notNull().default(0),
++    active: boolean("active").notNull().default(true),
++    createdAt: timestamp("createdAt").notNull().defaultNow(),
++  },
++  (t) => ({
++    userIdx: index("tasks_user_idx").on(t.userId),
++  }),
++);
+ 
+ /**
+  * One row per completed task per local calendar date (YYYY-MM-DD).
+@@ -43,6 +51,7 @@ export const completions = mysqlTable(
+   "completions",
+   {
+     id: serial("id").primaryKey(),
++    userId: varchar("userId", { length: 191 }).notNull(),
+     taskId: bigint("taskId", { mode: "number", unsigned: true }).notNull(),
+     date: varchar("date", { length: 10 }).notNull(),
+     completedAt: timestamp("completedAt").notNull().defaultNow(),
+@@ -50,6 +59,7 @@ export const completions = mysqlTable(
+   (t) => ({
+     taskDateUnique: uniqueIndex("task_date_unique").on(t.taskId, t.date),
+     dateIdx: index("date_idx").on(t.date),
++    userDateIdx: index("completions_user_date_idx").on(t.userId, t.date),
+   }),
+ );
+ 
+diff --git a/app/db/seed.ts b/app/db/seed.ts
+deleted file mode 100644
+index 6de1189..0000000
+--- a/app/db/seed.ts
++++ /dev/null
+@@ -1,17 +0,0 @@
+-import { getDb } from "../api/queries/connection";
+-// TODO: import tables from "./schema"
+-
+-async function seed() {
+-  const db = getDb();
+-  console.log("Seeding database...");
+-
+-  // TODO: insert seed data, e.g.
+-  // await db.insert(schema.posts).values([
+-  //   { title: "First post", content: "Hello world" },
+-  // ]);
+-
+-  console.log("Done.");
+-  process.exit(0); // close MySQL connection pool
+-}
+-
+-seed();
+diff --git a/app/package.json b/app/package.json
+index 828531d..3cdcadb 100644
+--- a/app/package.json
++++ b/app/package.json
+@@ -17,6 +17,8 @@
+     "db:push": "drizzle-kit push"
+   },
+   "dependencies": {
++    "@clerk/backend": "^3.11.7",
++    "@clerk/clerk-react": "^5.61.9",
+     "@hono/node-server": "^1.14.3",
+     "@hookform/resolvers": "^5.2.2",
+     "@radix-ui/react-accordion": "^1.2.12",
+@@ -45,10 +47,14 @@
+     "@radix-ui/react-toggle": "^1.1.10",
+     "@radix-ui/react-toggle-group": "^1.1.11",
+     "@radix-ui/react-tooltip": "^1.2.8",
++    "@sentry/node": "^10.66.0",
++    "@sentry/react": "^10.66.0",
+     "@tanstack/react-query": "^5.90.16",
+     "@trpc/client": "^11.8.1",
+     "@trpc/react-query": "^11.8.1",
+     "@trpc/server": "^11.8.1",
++    "@upstash/ratelimit": "^2.0.8",
++    "@upstash/redis": "^1.38.0",
+     "class-variance-authority": "^0.7.1",
+     "clsx": "^2.1.1",
+     "cmdk": "^1.1.1",
+diff --git a/app/server/app.ts b/app/server/app.ts
+index d813730..7be7d7d 100644
+--- a/app/server/app.ts
++++ b/app/server/app.ts
+@@ -1,8 +1,18 @@
+ import { Hono } from "hono";
+ import { bodyLimit } from "hono/body-limit";
+ import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
++import * as Sentry from "@sentry/node";
+ import { appRouter } from "./router.js";
+ import { createContext } from "./context.js";
++import { env } from "./lib/env.js";
++
++if (env.sentryDsn) {
++  Sentry.init({
++    dsn: env.sentryDsn,
++    environment: env.isProduction ? "production" : "development",
++    tracesSampleRate: 0.1,
++  });
++}
+ 
+ export const app = new Hono();
+ 
+@@ -13,6 +23,13 @@ app.use("/api/trpc/*", async (c) => {
+     req: c.req.raw,
+     router: appRouter,
+     createContext,
++    onError({ error, path }) {
++      // Auth and validation failures aren't bugs — don't spam Sentry with them.
++      if (error.code !== "UNAUTHORIZED" && error.code !== "BAD_REQUEST") {
++        Sentry.captureException(error, { tags: { trpcPath: path } });
++      }
++      console.error(`tRPC error on ${path}:`, error);
++    },
+   });
+ });
+ app.all("/api/*", (c) => c.json({ error: "Not Found" }, 404));
+diff --git a/app/server/context.ts b/app/server/context.ts
+index 62a55e1..713bce7 100644
+--- a/app/server/context.ts
++++ b/app/server/context.ts
+@@ -1,12 +1,32 @@
+ import type { FetchCreateContextFnOptions } from "@trpc/server/adapters/fetch";
++import { verifyToken } from "@clerk/backend";
++import { env } from "./lib/env.js";
+ 
+ export type TrpcContext = {
+   req: Request;
+   resHeaders: Headers;
++  userId: string | null;
+ };
+ 
+ export async function createContext(
+   opts: FetchCreateContextFnOptions,
+ ): Promise<TrpcContext> {
+-  return { req: opts.req, resHeaders: opts.resHeaders };
++  const authHeader = opts.req.headers.get("authorization");
++  const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
++
++  let userId: string | null = null;
++  if (token) {
++    try {
++      const payload = await verifyToken(token, {
++        secretKey: env.clerkSecretKey,
++      });
++      userId = payload.sub;
++    } catch {
++      // Invalid or expired token — treat the request as signed out rather
++      // than throwing here, so publicQuery procedures still work.
++      userId = null;
++    }
++  }
++
++  return { req: opts.req, resHeaders: opts.resHeaders, userId };
+ }
+diff --git a/app/server/lib/env.ts b/app/server/lib/env.ts
+index 4b4fa1a..c87d060 100644
+--- a/app/server/lib/env.ts
++++ b/app/server/lib/env.ts
+@@ -13,4 +13,9 @@ export const env = {
+   appSecret: required("APP_SECRET"),
+   isProduction: process.env.NODE_ENV === "production",
+   databaseUrl: required("DATABASE_URL"),
++  clerkSecretKey: required("CLERK_SECRET_KEY"),
++  // Optional — features degrade gracefully if these are unset.
++  upstashUrl: process.env.UPSTASH_REDIS_REST_URL ?? "",
++  upstashToken: process.env.UPSTASH_REDIS_REST_TOKEN ?? "",
++  sentryDsn: process.env.SENTRY_DSN ?? "",
+ };
+diff --git a/app/server/middleware.ts b/app/server/middleware.ts
+index d006a16..86c5b19 100644
+--- a/app/server/middleware.ts
++++ b/app/server/middleware.ts
+@@ -1,6 +1,7 @@
+-import { initTRPC } from "@trpc/server";
++import { initTRPC, TRPCError } from "@trpc/server";
+ import superjson from "superjson";
+ import type { TrpcContext } from "./context.js";
++import { ratelimit } from "./lib/ratelimit.js";
+ 
+ const t = initTRPC.context<TrpcContext>().create({
+   transformer: superjson,
+@@ -8,3 +9,25 @@ const t = initTRPC.context<TrpcContext>().create({
+ 
+ export const createRouter = t.router;
+ export const publicQuery = t.procedure;
++
++/**
++ * Requires a verified Clerk session and enforces a per-user rate limit.
++ * ctx.userId is guaranteed non-null inside.
++ */
++export const protectedProcedure = t.procedure.use(async ({ ctx, next }) => {
++  if (!ctx.userId) {
++    throw new TRPCError({ code: "UNAUTHORIZED", message: "Sign in required" });
++  }
++
++  if (ratelimit) {
++    const { success } = await ratelimit.limit(ctx.userId);
++    if (!success) {
++      throw new TRPCError({
++        code: "TOO_MANY_REQUESTS",
++        message: "Too many requests — slow down a little.",
++      });
++    }
++  }
++
++  return next({ ctx: { ...ctx, userId: ctx.userId } });
++});
+diff --git a/app/server/queries/tracker.ts b/app/server/queries/tracker.ts
+index a1ceb9b..45c1e21 100644
+--- a/app/server/queries/tracker.ts
++++ b/app/server/queries/tracker.ts
+@@ -3,41 +3,70 @@ import { getDb } from "./connection.js";
+ import { completions, tasks, type InsertTask } from "../../db/schema.js";
+ import { DEFAULT_ROUTINE } from "../../contracts/routine.js";
+ 
+-export async function listTasks() {
++export async function listTasks(userId: string) {
+   return getDb()
+     .select()
+     .from(tasks)
+-    .where(eq(tasks.active, true))
++    .where(and(eq(tasks.active, true), eq(tasks.userId, userId)))
+     .orderBy(asc(tasks.sortOrder), asc(tasks.id));
+ }
+ 
+-export async function createTask(data: Omit<InsertTask, "id" | "createdAt">) {
+-  const [{ id }] = await getDb().insert(tasks).values(data).$returningId();
+-  const [row] = await getDb().select().from(tasks).where(eq(tasks.id, id));
++export async function createTask(
++  userId: string,
++  data: Omit<InsertTask, "id" | "createdAt" | "userId">,
++) {
++  const [{ id }] = await getDb()
++    .insert(tasks)
++    .values({ ...data, userId })
++    .$returningId();
++  const [row] = await getDb()
++    .select()
++    .from(tasks)
++    .where(and(eq(tasks.id, id), eq(tasks.userId, userId)));
+   return row;
+ }
+ 
+ export async function updateTask(
++  userId: string,
+   id: number,
+-  data: Partial<Omit<InsertTask, "id" | "createdAt">>,
++  data: Partial<Omit<InsertTask, "id" | "createdAt" | "userId">>,
+ ) {
+-  await getDb().update(tasks).set(data).where(eq(tasks.id, id));
+-  const [row] = await getDb().select().from(tasks).where(eq(tasks.id, id));
++  await getDb()
++    .update(tasks)
++    .set(data)
++    .where(and(eq(tasks.id, id), eq(tasks.userId, userId)));
++  const [row] = await getDb()
++    .select()
++    .from(tasks)
++    .where(and(eq(tasks.id, id), eq(tasks.userId, userId)));
+   return row;
+ }
+ 
+-export async function deleteTask(id: number) {
++export async function deleteTask(userId: string, id: number) {
+   const db = getDb();
+-  await db.delete(completions).where(eq(completions.taskId, id));
+-  await db.delete(tasks).where(eq(tasks.id, id));
++  // Ownership check first so one user can never delete another user's rows.
++  const [owned] = await db
++    .select({ id: tasks.id })
++    .from(tasks)
++    .where(and(eq(tasks.id, id), eq(tasks.userId, userId)));
++  if (!owned) return;
++  await db
++    .delete(completions)
++    .where(and(eq(completions.taskId, id), eq(completions.userId, userId)));
++  await db.delete(tasks).where(and(eq(tasks.id, id), eq(tasks.userId, userId)));
+ }
+ 
+-/** Seeds the default weekly routine only when no tasks exist. */
+-export async function seedDefaultsIfEmpty() {
+-  const existing = await getDb().select({ id: tasks.id }).from(tasks).limit(1);
++/** Seeds the default weekly routine only when this user has no tasks yet. */
++export async function seedDefaultsIfEmpty(userId: string) {
++  const existing = await getDb()
++    .select({ id: tasks.id })
++    .from(tasks)
++    .where(eq(tasks.userId, userId))
++    .limit(1);
+   if (existing.length > 0) return { seeded: false };
+   await getDb().insert(tasks).values(
+     DEFAULT_ROUTINE.map((t) => ({
++      userId,
+       title: t.title,
+       note: t.note,
+       slot: t.slot,
+@@ -50,26 +79,40 @@ export async function seedDefaultsIfEmpty() {
+ }
+ 
+ /** Toggles a completion; returns the new completed state. */
+-export async function toggleCompletion(taskId: number, date: string) {
++export async function toggleCompletion(userId: string, taskId: number, date: string) {
+   const db = getDb();
++
++  // Ownership check — can't toggle completions on a task you don't own.
++  const [owned] = await db
++    .select({ id: tasks.id })
++    .from(tasks)
++    .where(and(eq(tasks.id, taskId), eq(tasks.userId, userId)));
++  if (!owned) throw new Error("Task not found");
++
+   const [existing] = await db
+     .select()
+     .from(completions)
+-    .where(and(eq(completions.taskId, taskId), eq(completions.date, date)))
++    .where(
++      and(
++        eq(completions.taskId, taskId),
++        eq(completions.date, date),
++        eq(completions.userId, userId),
++      ),
++    )
+     .limit(1);
+ 
+   if (existing) {
+     await db.delete(completions).where(eq(completions.id, existing.id));
+     return { completed: false };
+   }
+-  await db.insert(completions).values({ taskId, date });
++  await db.insert(completions).values({ taskId, date, userId });
+   return { completed: true };
+ }
+ 
+-export async function completionsInRange(start: string, end: string) {
++export async function completionsInRange(userId: string, start: string, end: string) {
+   return getDb()
+     .select()
+     .from(completions)
+-    .where(between(completions.date, start, end))
++    .where(and(between(completions.date, start, end), eq(completions.userId, userId)))
+     .orderBy(asc(completions.date));
+ }
+diff --git a/app/server/trackerRouter.ts b/app/server/trackerRouter.ts
+index c3823de..02ba590 100644
+--- a/app/server/trackerRouter.ts
++++ b/app/server/trackerRouter.ts
+@@ -1,5 +1,5 @@
+ import { z } from "zod";
+-import { createRouter, publicQuery } from "./middleware.js";
++import { createRouter, protectedProcedure } from "./middleware.js";
+ import {
+   completionsInRange,
+   createTask,
+@@ -35,9 +35,9 @@ const durationField = z
+   .optional();
+ 
+ export const trackerRouter = createRouter({
+-  listTasks: publicQuery.query(() => listTasks()),
++  listTasks: protectedProcedure.query(({ ctx }) => listTasks(ctx.userId)),
+ 
+-  createTask: publicQuery
++  createTask: protectedProcedure
+     .input(
+       z.object({
+         title: z.string().trim().min(1, "Title is required").max(120),
+@@ -50,8 +50,8 @@ export const trackerRouter = createRouter({
+         sortOrder: z.number().int().optional(),
+       }),
+     )
+-    .mutation(({ input }) =>
+-      createTask({
++    .mutation(({ ctx, input }) =>
++      createTask(ctx.userId, {
+         title: input.title,
+         note: input.note ?? null,
+         slot: input.slot,
+@@ -63,7 +63,7 @@ export const trackerRouter = createRouter({
+       }),
+     ),
+ 
+-  updateTask: publicQuery
++  updateTask: protectedProcedure
+     .input(
+       z.object({
+         id: z.number(),
+@@ -77,23 +77,23 @@ export const trackerRouter = createRouter({
+         sortOrder: z.number().int().optional(),
+       }),
+     )
+-    .mutation(({ input }) => {
++    .mutation(({ ctx, input }) => {
+       const { id, ...data } = input;
+       if (data.days) data.days = [...data.days].sort();
+-      return updateTask(id, data);
++      return updateTask(ctx.userId, id, data);
+     }),
+ 
+-  deleteTask: publicQuery
++  deleteTask: protectedProcedure
+     .input(z.object({ id: z.number() }))
+-    .mutation(({ input }) => deleteTask(input.id)),
++    .mutation(({ ctx, input }) => deleteTask(ctx.userId, input.id)),
+ 
+-  seedDefaults: publicQuery.mutation(() => seedDefaultsIfEmpty()),
++  seedDefaults: protectedProcedure.mutation(({ ctx }) => seedDefaultsIfEmpty(ctx.userId)),
+ 
+-  toggleCompletion: publicQuery
++  toggleCompletion: protectedProcedure
+     .input(z.object({ taskId: z.number(), date: dateString }))
+-    .mutation(({ input }) => toggleCompletion(input.taskId, input.date)),
++    .mutation(({ ctx, input }) => toggleCompletion(ctx.userId, input.taskId, input.date)),
+ 
+-  completionsInRange: publicQuery
++  completionsInRange: protectedProcedure
+     .input(z.object({ start: dateString, end: dateString }))
+-    .query(({ input }) => completionsInRange(input.start, input.end)),
++    .query(({ ctx, input }) => completionsInRange(ctx.userId, input.start, input.end)),
+ });
+diff --git a/app/src/App.tsx b/app/src/App.tsx
+index 343efb6..a9eb456 100644
+--- a/app/src/App.tsx
++++ b/app/src/App.tsx
+@@ -1,4 +1,5 @@
+ import { Routes, Route } from "react-router";
++import { SignedIn, SignedOut, RedirectToSignIn } from "@clerk/clerk-react";
+ import AppLayout from "@/components/AppLayout";
+ import Today from "@/pages/Today";
+ import Setup from "@/pages/Setup";
+@@ -6,12 +7,19 @@ import Reports from "@/pages/Reports";
+ 
+ export default function App() {
+   return (
+-    <Routes>
+-      <Route element={<AppLayout />}>
+-        <Route path="/" element={<Today />} />
+-        <Route path="/setup" element={<Setup />} />
+-        <Route path="/reports" element={<Reports />} />
+-      </Route>
+-    </Routes>
++    <>
++      <SignedOut>
++        <RedirectToSignIn />
++      </SignedOut>
++      <SignedIn>
++        <Routes>
++          <Route element={<AppLayout />}>
++            <Route path="/" element={<Today />} />
++            <Route path="/setup" element={<Setup />} />
++            <Route path="/reports" element={<Reports />} />
++          </Route>
++        </Routes>
++      </SignedIn>
++    </>
+   );
+ }
+diff --git a/app/src/components/AppLayout.tsx b/app/src/components/AppLayout.tsx
+index 9f057f0..f7abd51 100644
+--- a/app/src/components/AppLayout.tsx
++++ b/app/src/components/AppLayout.tsx
+@@ -1,4 +1,5 @@
+ import { NavLink, Outlet } from "react-router";
++import { UserButton } from "@clerk/clerk-react";
+ import { CalendarCheck2, ChartColumnBig, Flame, SlidersHorizontal } from "lucide-react";
+ import { endOfMonth, getDaysInMonth } from "@/lib/dates";
+ import { useAutoSeed } from "@/hooks/use-tracker";
+@@ -41,7 +42,10 @@ export default function AppLayout() {
+       <aside className="fixed inset-y-0 left-0 z-40 hidden w-60 flex-col border-r border-border bg-card/40 backdrop-blur md:flex">
+         <div className="flex items-center justify-between px-5 pb-6 pt-6">
+           <Logo />
+-          <AppearanceSettings />
++          <div className="flex items-center gap-2">
++            <AppearanceSettings />
++            <UserButton afterSignOutUrl="/" />
++          </div>
+         </div>
+         <nav className="flex-1 space-y-1 px-3">
+           {NAV.map(({ to, label, icon: Icon, end }) => (
+@@ -90,6 +94,7 @@ export default function AppLayout() {
+             <div>monthly cycle</div>
+           </div>
+           <AppearanceSettings />
++          <UserButton afterSignOutUrl="/" />
+         </div>
+       </header>
+ 
+diff --git a/app/src/hooks/use-tracker.ts b/app/src/hooks/use-tracker.ts
+index fa78b6c..5260d98 100644
+--- a/app/src/hooks/use-tracker.ts
++++ b/app/src/hooks/use-tracker.ts
+@@ -49,7 +49,7 @@ export function useToggleCompletion(rangeStart: string, rangeEnd: string) {
+         }
+         return [
+           ...old,
+-          { id: -Date.now(), taskId, date, completedAt: new Date() },
++          { id: -Date.now(), userId: "", taskId, date, completedAt: new Date() },
+         ];
+       });
+       return { prev };
+diff --git a/app/src/main.tsx b/app/src/main.tsx
+index dfd9040..a4505d5 100644
+--- a/app/src/main.tsx
++++ b/app/src/main.tsx
+@@ -2,21 +2,39 @@ import { StrictMode } from 'react'
+ import { createRoot } from 'react-dom/client'
+ import { BrowserRouter } from 'react-router'
+ import { ThemeProvider } from 'next-themes'
++import { ClerkProvider } from '@clerk/clerk-react'
++import * as Sentry from '@sentry/react'
+ import './index.css'
+ import { TRPCProvider } from "@/providers/trpc"
+ import { AccentProvider } from "@/providers/accent"
+ import App from './App.tsx'
+ 
++const CLERK_PUBLISHABLE_KEY = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY as string;
++if (!CLERK_PUBLISHABLE_KEY) {
++  throw new Error("Missing VITE_CLERK_PUBLISHABLE_KEY in your .env file");
++}
++
++const SENTRY_DSN = import.meta.env.VITE_SENTRY_DSN as string | undefined;
++if (SENTRY_DSN) {
++  Sentry.init({
++    dsn: SENTRY_DSN,
++    environment: import.meta.env.MODE,
++    tracesSampleRate: 0.1,
++  });
++}
++
+ createRoot(document.getElementById('root')!).render(
+   <StrictMode>
+-    <BrowserRouter>
+-      <ThemeProvider attribute="class" defaultTheme="dark" enableSystem>
+-        <AccentProvider>
+-          <TRPCProvider>
+-            <App />
+-          </TRPCProvider>
+-        </AccentProvider>
+-      </ThemeProvider>
+-    </BrowserRouter>
++    <ClerkProvider publishableKey={CLERK_PUBLISHABLE_KEY} afterSignOutUrl="/">
++      <BrowserRouter>
++        <ThemeProvider attribute="class" defaultTheme="dark" enableSystem>
++          <AccentProvider>
++            <TRPCProvider>
++              <App />
++            </TRPCProvider>
++          </AccentProvider>
++        </ThemeProvider>
++      </BrowserRouter>
++    </ClerkProvider>
+   </StrictMode>,
+ )
+diff --git a/app/src/providers/trpc.tsx b/app/src/providers/trpc.tsx
+index de016db..b8d93ff 100644
+--- a/app/src/providers/trpc.tsx
++++ b/app/src/providers/trpc.tsx
+@@ -2,28 +2,37 @@ import { createTRPCReact } from "@trpc/react-query";
+ import { httpBatchLink } from "@trpc/client";
+ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+ import superjson from "superjson";
++import { useAuth } from "@clerk/clerk-react";
++import { useState } from "react";
+ import type { AppRouter } from "../../server/router";
+ import type { ReactNode } from "react";
+ 
+ export const trpc = createTRPCReact<AppRouter>();
+ 
+-const queryClient = new QueryClient();
+-const trpcClient = trpc.createClient({
+-  links: [
+-    httpBatchLink({
+-      url: "/api/trpc",
+-      transformer: superjson,
+-      fetch(input, init) {
+-        return globalThis.fetch(input, {
+-          ...(init ?? {}),
+-          credentials: "include",
+-        });
+-      },
++export function TRPCProvider({ children }: { children: ReactNode }) {
++  const { getToken } = useAuth();
++  const [queryClient] = useState(() => new QueryClient());
++  const [trpcClient] = useState(() =>
++    trpc.createClient({
++      links: [
++        httpBatchLink({
++          url: "/api/trpc",
++          transformer: superjson,
++          async headers() {
++            const token = await getToken();
++            return token ? { Authorization: `Bearer ${token}` } : {};
++          },
++          fetch(input, init) {
++            return globalThis.fetch(input, {
++              ...(init ?? {}),
++              credentials: "include",
++            });
++          },
++        }),
++      ],
+     }),
+-  ],
+-});
++  );
+ 
+-export function TRPCProvider({ children }: { children: ReactNode }) {
+   return (
+     <trpc.Provider client={trpcClient} queryClient={queryClient}>
+       <QueryClientProvider client={queryClient}>
+diff --git a/app/tsconfig.server.json b/app/tsconfig.server.json
+index 873a9ee..cca7b1a 100644
+--- a/app/tsconfig.server.json
++++ b/app/tsconfig.server.json
+@@ -29,7 +29,7 @@
+                                                         "./db/*"
+                                                     ]
+                                       },
+-                            "ignoreDeprecations":  "6.0"
++                            "ignoreDeprecations":  "5.0"
+                         },
+     "include":  [
+                     "api",

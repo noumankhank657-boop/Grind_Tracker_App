@@ -1,4 +1,5 @@
 import { NavLink, Outlet } from "react-router";
+import { UserButton } from "@clerk/clerk-react";
 import { CalendarCheck2, ChartColumnBig, Flame, SlidersHorizontal } from "lucide-react";
 import { endOfMonth, getDaysInMonth } from "@/lib/dates";
 import { useAutoSeed } from "@/hooks/use-tracker";
@@ -41,7 +42,10 @@ export default function AppLayout() {
       <aside className="fixed inset-y-0 left-0 z-40 hidden w-60 flex-col border-r border-border bg-card/40 backdrop-blur md:flex">
         <div className="flex items-center justify-between px-5 pb-6 pt-6">
           <Logo />
-          <AppearanceSettings />
+          <div className="flex items-center gap-2">
+            <AppearanceSettings />
+            <UserButton afterSignOutUrl="/" />
+          </div>
         </div>
         <nav className="flex-1 space-y-1 px-3">
           {NAV.map(({ to, label, icon: Icon, end }) => (
@@ -90,6 +94,7 @@ export default function AppLayout() {
             <div>monthly cycle</div>
           </div>
           <AppearanceSettings />
+          <UserButton afterSignOutUrl="/" />
         </div>
       </header>
 
