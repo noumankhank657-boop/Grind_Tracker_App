@@ -43,6 +43,9 @@ interface FormState {
   slot: TaskSlot;
   deadline: string; // "" = no deadline, otherwise "HH:MM"
   durationMin: number | null;
+  goalType: "checkbox" | "numeric";
+  goalTarget: number | null;
+  goalUnit: string;
   days: number[];
   color: string;
 }
@@ -53,6 +56,9 @@ const EMPTY_FORM: FormState = {
   slot: "anytime",
   deadline: "",
   durationMin: null,
+  goalType: "checkbox",
+  goalTarget: null,
+  goalUnit: "",
   days: [],
   color: "lime",
 };
@@ -133,13 +139,19 @@ function TaskDialog({
         slot: initial.slot,
         deadline: initial.deadline,
         durationMin: initial.durationMin,
+        goalType: initial.goalType,
+        goalTarget: initial.goalTarget,
+        goalUnit: initial.goalUnit,
         days: initial.days,
         color: initial.color,
       });
     }
   }, [open, initial]);
 
-  const valid = form.title.trim().length > 0 && form.days.length > 0;
+  const valid =
+    form.title.trim().length > 0 &&
+    form.days.length > 0 &&
+    (form.goalType === "checkbox" || (form.goalTarget != null && form.goalTarget > 0));
   const toggleDay = (day: number) =>
     setForm((f) => ({
       ...f,
@@ -148,7 +160,7 @@ function TaskDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="flex max-h-[85vh] flex-col sm:max-w-md">
         <DialogHeader>
           <DialogTitle className="font-display">
             {initial.id ? "Edit task" : "Add a task"}
@@ -158,7 +170,7 @@ function TaskDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-5 py-2">
+        <div className="-mx-1 space-y-5 overflow-y-auto px-1 py-2">
           <div className="space-y-2">
             <Label htmlFor="task-title">Title</Label>
             <Input
@@ -188,6 +200,59 @@ function TaskDialog({
               <p className="text-xs text-destructive">Pick at least one day.</p>
             )}
           </div>
+          <div className="space-y-2">
+            <Label>How is this tracked?</Label>
+            <Select
+              value={form.goalType}
+              onValueChange={(v) =>
+                setForm((f) => ({ ...f, goalType: v as "checkbox" | "numeric" }))
+              }
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="checkbox">Simple done / not done</SelectItem>
+                <SelectItem value="numeric">A number (e.g. glasses, pages, km)</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          {form.goalType === "numeric" && (
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="task-goal-target">Daily target</Label>
+                <Input
+                  id="task-goal-target"
+                  type="number"
+                  min={1}
+                  max={100000}
+                  value={form.goalTarget ?? ""}
+                  onChange={(e) =>
+                    setForm((f) => ({
+                      ...f,
+                      goalTarget: e.target.value === "" ? null : Number(e.target.value),
+                    }))
+                  }
+                  placeholder="e.g. 8"
+                />
+                {form.goalTarget == null && (
+                  <p className="text-xs text-destructive">Set a target amount.</p>
+                )}
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="task-goal-unit">
+                  Unit <span className="text-muted-foreground">(optional)</span>
+                </Label>
+                <Input
+                  id="task-goal-unit"
+                  value={form.goalUnit}
+                  onChange={(e) => setForm((f) => ({ ...f, goalUnit: e.target.value }))}
+                  placeholder="e.g. glasses"
+                  maxLength={24}
+                />
+              </div>
+            </div>
+          )}
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Time slot</Label>
@@ -309,6 +374,9 @@ export default function Setup() {
       slot: task.slot,
       deadline: task.deadline ?? "",
       durationMin: task.durationMin,
+      goalType: task.goalType,
+      goalTarget: task.goalTarget,
+      goalUnit: task.goalUnit ?? "",
       days: [...task.days],
       color: task.color,
     });
@@ -322,6 +390,9 @@ export default function Setup() {
       slot: form.slot,
       deadline: form.deadline === "" ? null : form.deadline,
       durationMin: form.durationMin,
+      goalType: form.goalType,
+      goalTarget: form.goalType === "numeric" ? form.goalTarget : null,
+      goalUnit: form.goalType === "numeric" && form.goalUnit.trim() ? form.goalUnit.trim() : null,
       days: form.days,
       color: form.color,
     };

@@ -49,7 +49,36 @@ export function useToggleCompletion(rangeStart: string, rangeEnd: string) {
         }
         return [
           ...old,
-          { id: -Date.now(), userId: "", taskId, date, completedAt: new Date() },
+          { id: -Date.now(), userId: "", taskId, date, value: null, completedAt: new Date() },
+        ];
+      });
+      return { prev };
+    },
+    onError: (_err, _vars, ctx) => {
+      if (ctx?.prev) utils.tracker.completionsInRange.setData(key, ctx.prev);
+    },
+    onSettled: () => {
+      utils.tracker.completionsInRange.invalidate();
+    },
+  });
+}
+
+/** Set logged progress for a numeric-goal task with an optimistic cache update. */
+export function useLogProgress(rangeStart: string, rangeEnd: string) {
+  const utils = trpc.useUtils();
+  const key = { start: rangeStart, end: rangeEnd };
+
+  return trpc.tracker.logProgress.useMutation({
+    onMutate: async ({ taskId, date, value }) => {
+      await utils.tracker.completionsInRange.cancel();
+      const prev = utils.tracker.completionsInRange.getData(key);
+      utils.tracker.completionsInRange.setData(key, (old) => {
+        if (!old) return old;
+        const withoutThis = old.filter((r) => !(r.taskId === taskId && r.date === date));
+        if (value <= 0) return withoutThis;
+        return [
+          ...withoutThis,
+          { id: -Date.now(), userId: "", taskId, date, value, completedAt: new Date() },
         ];
       });
       return { prev };

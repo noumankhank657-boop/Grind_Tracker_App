@@ -32,6 +32,12 @@ export const tasks = mysqlTable(
     deadline: varchar("deadline", { length: 5 }),
     /** Estimated effort in minutes. Null = no estimate. */
     durationMin: int("durationMin"),
+    /** "checkbox" = done/not-done. "numeric" = tracked against goalTarget. */
+    goalType: mysqlEnum("goalType", ["checkbox", "numeric"]).notNull().default("checkbox"),
+    /** Target amount for numeric goals (e.g. 8 for "8 glasses"). Null for checkbox tasks. */
+    goalTarget: int("goalTarget"),
+    /** Unit label for numeric goals (e.g. "glasses", "pages", "min"). Null for checkbox tasks. */
+    goalUnit: varchar("goalUnit", { length: 24 }),
     days: json("days").$type<number[]>().notNull(),
     color: varchar("color", { length: 24 }).notNull().default("lime"),
     sortOrder: int("sortOrder").notNull().default(0),
@@ -54,6 +60,8 @@ export const completions = mysqlTable(
     userId: varchar("userId", { length: 191 }).notNull(),
     taskId: bigint("taskId", { mode: "number", unsigned: true }).notNull(),
     date: varchar("date", { length: 10 }).notNull(),
+    /** Logged amount for numeric-goal tasks (e.g. 5 of 8 glasses). Null for checkbox tasks. */
+    value: int("value"),
     completedAt: timestamp("completedAt").notNull().defaultNow(),
   },
   (t) => ({

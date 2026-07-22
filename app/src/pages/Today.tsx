@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router";
 import { AnimatePresence, motion } from "framer-motion";
-import { Check, Clock, Flame, Sparkles, Timer } from "lucide-react";
+import { Check, Clock, Flame, Minus, Plus, Sparkles, Timer } from "lucide-react";
 import type { Task } from "@db/schema";
 import { ProgressRing } from "@/components/ProgressRing";
-import { useCompletions, useTasks, useToggleCompletion } from "@/hooks/use-tracker";
+import { useCompletions, useLogProgress, useTasks, useToggleCompletion } from "@/hooks/use-tracker";
 import { useAccent } from "@/providers/accent";
 import { alpha, hexAlpha, hexOf } from "@/lib/colors";
 import {
@@ -25,8 +25,10 @@ import {
 import {
   buildCompletionMap,
   dayStat,
+  isTaskDone,
   monthStats,
   perfectDayStreak,
+  progressFor,
   scheduledFor,
   taskStreak,
 } from "@/lib/stats";
@@ -87,22 +89,74 @@ function DeadlineChip({
 
 /* ---------- task row ---------- */
 
+function NumericControl({
+  task,
+  value,
+  done,
+  onChange,
+}: {
+  task: Task;
+  value: number;
+  done: boolean;
+  onChange: (next: number) => void;
+}) {
+  const target = task.goalTarget ?? 1;
+  const hex = hexOf(task.color);
+  return (
+    <div className="flex shrink-0 items-center gap-2">
+      <button
+        type="button"
+        onClick={() => onChange(Math.max(0, value - 1))}
+        disabled={value <= 0}
+        aria-label={`Decrease ${task.title}`}
+        className="flex h-7 w-7 items-center justify-center rounded-lg border-2 border-zinc-500 transition-all hover:border-zinc-400 active:scale-90 disabled:opacity-30"
+      >
+        <Minus className="h-3.5 w-3.5" />
+      </button>
+      <div
+        className="min-w-[3.5rem] text-center text-sm font-bold"
+        style={done ? { color: hex } : undefined}
+      >
+        {value}
+        <span className="text-muted-foreground">
+          /{target}
+          {task.goalUnit ? ` ${task.goalUnit}` : ""}
+        </span>
+      </div>
+      <button
+        type="button"
+        onClick={() => onChange(value + 1)}
+        aria-label={`Increase ${task.title}`}
+        className="flex h-7 w-7 items-center justify-center rounded-lg border-2 transition-all active:scale-90"
+        style={done ? { backgroundColor: hex, borderColor: hex } : { borderColor: "#71717a" }}
+      >
+        <Plus className="h-3.5 w-3.5" style={done ? { color: "#09090b" } : undefined} />
+      </button>
+    </div>
+  );
+}
+
 function TaskRow({
   task,
   done,
   streak,
   now,
+  progress,
   onToggle,
+  onLogProgress,
   index,
 }: {
   task: Task;
   done: boolean;
   streak: number;
   now: Date;
+  progress: number;
   onToggle: () => void;
+  onLogProgress: (value: number) => void;
   index: number;
 }) {
   const hex = hexOf(task.color);
+  const isNumeric = task.goalType === "numeric";
   return (
     <motion.div
       layout
@@ -116,40 +170,44 @@ function TaskRow({
       style={done ? { boxShadow: `inset 0 0 0 1px ${hexAlpha(task.color, 0.25)}` } : undefined}
     >
       <span className="h-9 w-1 shrink-0 rounded-full" style={{ backgroundColor: hex }} />
-      <button
-        onClick={onToggle}
-        aria-label={done ? `Mark ${task.title} incomplete` : `Mark ${task.title} complete`}
-        className={cn(
-          "flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border-2 transition-all active:scale-90",
-          !done && "border-zinc-500 hover:border-zinc-400",
-        )}
-        style={done ? { backgroundColor: hex, borderColor: hex } : undefined}
-      >
-        <AnimatePresence>
-          {done && (
-            <motion.svg
-              viewBox="0 0 24 24"
-              className="h-4 w-4"
-              initial={{ scale: 0.4, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.4, opacity: 0 }}
-              transition={{ type: "spring", stiffness: 500, damping: 20 }}
-            >
-              <motion.path
-                d="M5 13l4 4L19 7"
-                fill="none"
-                stroke="#09090b"
-                strokeWidth={3.2}
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                initial={{ pathLength: 0 }}
-                animate={{ pathLength: 1 }}
-                transition={{ duration: 0.25 }}
-              />
-            </motion.svg>
+      {isNumeric ? (
+        <NumericControl task={task} value={progress} done={done} onChange={onLogProgress} />
+      ) : (
+        <button
+          onClick={onToggle}
+          aria-label={done ? `Mark ${task.title} incomplete` : `Mark ${task.title} complete`}
+          className={cn(
+            "flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border-2 transition-all active:scale-90",
+            !done && "border-zinc-500 hover:border-zinc-400",
           )}
-        </AnimatePresence>
-      </button>
+          style={done ? { backgroundColor: hex, borderColor: hex } : undefined}
+        >
+          <AnimatePresence>
+            {done && (
+              <motion.svg
+                viewBox="0 0 24 24"
+                className="h-4 w-4"
+                initial={{ scale: 0.4, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0.4, opacity: 0 }}
+                transition={{ type: "spring", stiffness: 500, damping: 20 }}
+              >
+                <motion.path
+                  d="M5 13l4 4L19 7"
+                  fill="none"
+                  stroke="#09090b"
+                  strokeWidth={3.2}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  initial={{ pathLength: 0 }}
+                  animate={{ pathLength: 1 }}
+                  transition={{ duration: 0.25 }}
+                />
+              </motion.svg>
+            )}
+          </AnimatePresence>
+        </button>
+      )}
       <div className="min-w-0 flex-1">
         <div
           className={cn(
@@ -219,6 +277,7 @@ export default function Today() {
   const tasksQuery = useTasks();
   const completionsQuery = useCompletions(rangeStart, rangeEnd);
   const toggle = useToggleCompletion(rangeStart, rangeEnd);
+  const logProgress = useLogProgress(rangeStart, rangeEnd);
 
   const tasks = useMemo(() => tasksQuery.data ?? [], [tasksQuery.data]);
   const byDate = useMemo(
@@ -265,7 +324,7 @@ export default function Today() {
     tasks: todayTasks.filter((t) => t.slot === slot).sort(byDeadlineThenOrder),
   })).filter((s) => s.tasks.length > 0);
 
-  const doneSet = byDate.get(todayKey()) ?? new Set<number>();
+  const todayDateKey = todayKey();
   const stat = dayStat(tasks, byDate, today);
   const streak = perfectDayStreak(tasks, byDate, today);
   const month = monthStats(tasks, byDate, today, today);
@@ -424,7 +483,8 @@ export default function Today() {
             </h2>
             <div className="h-px flex-1 bg-border" />
             <span className="text-xs font-semibold text-muted-foreground">
-              {sectionTasks.filter((t) => doneSet.has(t.id)).length}/{sectionTasks.length}
+              {sectionTasks.filter((t) => isTaskDone(t, byDate, todayDateKey)).length}/
+              {sectionTasks.length}
             </span>
           </div>
           <div className="space-y-2.5">
@@ -433,10 +493,14 @@ export default function Today() {
                 key={task.id}
                 task={task}
                 index={i}
-                done={doneSet.has(task.id)}
+                done={isTaskDone(task, byDate, todayDateKey)}
+                progress={progressFor(task, byDate, todayDateKey)}
                 streak={taskStreak(task, byDate, today)}
                 now={now}
-                onToggle={() => toggle.mutate({ taskId: task.id, date: todayKey() })}
+                onToggle={() => toggle.mutate({ taskId: task.id, date: todayDateKey })}
+                onLogProgress={(value) =>
+                  logProgress.mutate({ taskId: task.id, date: todayDateKey, value })
+                }
               />
             ))}
           </div>

@@ -109,6 +109,53 @@ export async function toggleCompletion(userId: string, taskId: number, date: str
   return { completed: true };
 }
 
+/**
+ * Sets the logged amount for a numeric-goal task on a given date.
+ * A value <= 0 clears the entry entirely (back to not-started).
+ * Returns the resulting value (null if cleared).
+ */
+export async function logProgress(
+  userId: string,
+  taskId: number,
+  date: string,
+  value: number,
+) {
+  const db = getDb();
+
+  // Ownership check — same pattern as toggleCompletion.
+  const [owned] = await db
+    .select({ id: tasks.id })
+    .from(tasks)
+    .where(and(eq(tasks.id, taskId), eq(tasks.userId, userId)));
+  if (!owned) throw new Error("Task not found");
+
+  const [existing] = await db
+    .select()
+    .from(completions)
+    .where(
+      and(
+        eq(completions.taskId, taskId),
+        eq(completions.date, date),
+        eq(completions.userId, userId),
+      ),
+    )
+    .limit(1);
+
+  if (value <= 0) {
+    if (existing) {
+      await db.delete(completions).where(eq(completions.id, existing.id));
+    }
+    return { value: null };
+  }
+
+  if (existing) {
+    await db.update(completions).set({ value }).where(eq(completions.id, existing.id));
+  } else {
+    await db.insert(completions).values({ taskId, date, userId, value });
+  }
+  return { value };
+}
+
 export async function completionsInRange(userId: string, start: string, end: string) {
   return getDb()
     .select()

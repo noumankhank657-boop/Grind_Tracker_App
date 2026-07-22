@@ -5,6 +5,7 @@ import {
   createTask,
   deleteTask,
   listTasks,
+  logProgress,
   seedDefaultsIfEmpty,
   toggleCompletion,
   updateTask,
@@ -19,6 +20,17 @@ const daysOfWeek = z
   .min(1, "Pick at least one day");
 
 const slotEnum = z.enum(["anytime", "morning", "afternoon", "evening"]);
+const goalTypeEnum = z.enum(["checkbox", "numeric"]);
+
+const goalTargetField = z
+  .number()
+  .int()
+  .min(1, "Target must be at least 1")
+  .max(100000, "Target is too large")
+  .nullable()
+  .optional();
+
+const goalUnitField = z.string().trim().max(24).nullable().optional();
 
 const deadlineField = z
   .string()
@@ -45,6 +57,9 @@ export const trackerRouter = createRouter({
         slot: slotEnum,
         deadline: deadlineField,
         durationMin: durationField,
+        goalType: goalTypeEnum.default("checkbox"),
+        goalTarget: goalTargetField,
+        goalUnit: goalUnitField,
         days: daysOfWeek,
         color: z.string().max(24),
         sortOrder: z.number().int().optional(),
@@ -57,6 +72,9 @@ export const trackerRouter = createRouter({
         slot: input.slot,
         deadline: input.deadline ?? null,
         durationMin: input.durationMin ?? null,
+        goalType: input.goalType,
+        goalTarget: input.goalType === "numeric" ? input.goalTarget ?? 1 : null,
+        goalUnit: input.goalType === "numeric" ? input.goalUnit ?? null : null,
         days: [...input.days].sort(),
         color: input.color,
         sortOrder: input.sortOrder ?? 99,
@@ -72,6 +90,9 @@ export const trackerRouter = createRouter({
         slot: slotEnum.optional(),
         deadline: deadlineField,
         durationMin: durationField,
+        goalType: goalTypeEnum.optional(),
+        goalTarget: goalTargetField,
+        goalUnit: goalUnitField,
         days: daysOfWeek.optional(),
         color: z.string().max(24).optional(),
         sortOrder: z.number().int().optional(),
@@ -80,6 +101,10 @@ export const trackerRouter = createRouter({
     .mutation(({ ctx, input }) => {
       const { id, ...data } = input;
       if (data.days) data.days = [...data.days].sort();
+      if (data.goalType === "checkbox") {
+        data.goalTarget = null;
+        data.goalUnit = null;
+      }
       return updateTask(ctx.userId, id, data);
     }),
 
@@ -92,6 +117,18 @@ export const trackerRouter = createRouter({
   toggleCompletion: protectedProcedure
     .input(z.object({ taskId: z.number(), date: dateString }))
     .mutation(({ ctx, input }) => toggleCompletion(ctx.userId, input.taskId, input.date)),
+
+  logProgress: protectedProcedure
+    .input(
+      z.object({
+        taskId: z.number(),
+        date: dateString,
+        value: z.number().int().min(0).max(100000),
+      }),
+    )
+    .mutation(({ ctx, input }) =>
+      logProgress(ctx.userId, input.taskId, input.date, input.value),
+    ),
 
   completionsInRange: protectedProcedure
     .input(z.object({ start: dateString, end: dateString }))

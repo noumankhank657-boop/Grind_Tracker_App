@@ -10,20 +10,39 @@ import {
   toKey,
 } from "@/lib/dates";
 
-/** date key → set of completed task ids */
-export type CompletionMap = Map<string, Set<number>>;
+/** date key → taskId → logged value (null for checkbox-style completions) */
+export type CompletionMap = Map<string, Map<number, number | null>>;
 
 export function buildCompletionMap(rows: Completion[]): CompletionMap {
   const map: CompletionMap = new Map();
   for (const row of rows) {
-    let set = map.get(row.date);
-    if (!set) {
-      set = new Set();
-      map.set(row.date, set);
+    let inner = map.get(row.date);
+    if (!inner) {
+      inner = new Map();
+      map.set(row.date, inner);
     }
-    set.add(row.taskId);
+    inner.set(row.taskId, row.value ?? null);
   }
   return map;
+}
+
+/**
+ * A task counts as "done" on a date when:
+ * - checkbox tasks: a completion row exists at all
+ * - numeric tasks: a completion row exists AND its value meets goalTarget
+ */
+export function isTaskDone(task: Task, byDate: CompletionMap, dateKey: string): boolean {
+  const entry = byDate.get(dateKey)?.get(task.id);
+  if (entry === undefined) return false;
+  if (task.goalType === "numeric") {
+    return (entry ?? 0) >= (task.goalTarget ?? 1);
+  }
+  return true;
+}
+
+/** Current logged progress for a numeric task on a date (0 if none logged). */
+export function progressFor(task: Task, byDate: CompletionMap, dateKey: string): number {
+  return byDate.get(dateKey)?.get(task.id) ?? 0;
 }
 
 /** Tasks scheduled on a given calendar date (by weekday). */
@@ -41,8 +60,8 @@ export interface DayStat {
 
 export function dayStat(tasks: Task[], byDate: CompletionMap, date: Date): DayStat {
   const scheduled = scheduledFor(tasks, date);
-  const doneSet = byDate.get(toKey(date));
-  const done = scheduled.filter((t) => doneSet?.has(t.id)).length;
+  const dateKey = toKey(date);
+  const done = scheduled.filter((t) => isTaskDone(t, byDate, dateKey)).length;
   const total = scheduled.length;
   const pct = total === 0 ? 0 : done / total;
   return { done, total, pct, perfect: total > 0 && done === total };
@@ -78,7 +97,7 @@ export function perfectDayStreak(tasks: Task[], byDate: CompletionMap, today: Da
 export function taskStreak(task: Task, byDate: CompletionMap, today: Date): number {
   let streak = 0;
   let cursor = today;
-  const doneToday = byDate.get(toKey(cursor))?.has(task.id) ?? false;
+  const doneToday = isTaskDone(task, byDate, toKey(cursor));
   if (task.days.includes(getDay(cursor)) && !doneToday) {
     cursor = addDays(cursor, -1);
   }
@@ -88,7 +107,7 @@ export function taskStreak(task: Task, byDate: CompletionMap, today: Date): numb
       if (isBefore(cursor, addDays(today, -400))) break;
       continue;
     }
-    if (!(byDate.get(toKey(cursor))?.has(task.id) ?? false)) break;
+    if (!isTaskDone(task, byDate, toKey(cursor))) break;
     streak += 1;
     cursor = addDays(cursor, -1);
     if (isBefore(cursor, addDays(today, -400))) break;
@@ -142,7 +161,7 @@ export function monthStats(
     for (const { date } of days) {
       if (task.days.includes(getDay(date))) {
         scheduled += 1;
-        if (byDate.get(toKey(date))?.has(task.id)) done += 1;
+        if (isTaskDone(task, byDate, toKey(date))) done += 1;
       }
     }
     return { task, done, scheduled, pct: scheduled === 0 ? 0 : done / scheduled };
@@ -237,7 +256,7 @@ export function yearStats(
       for (const date of days) {
         if (task.days.includes(getDay(date))) {
           scheduled += 1;
-          if (byDate.get(toKey(date))?.has(task.id)) done += 1;
+          if (isTaskDone(task, byDate, toKey(date))) done += 1;
         }
       }
     }
